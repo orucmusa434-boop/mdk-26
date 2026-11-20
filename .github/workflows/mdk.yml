@@ -1,0 +1,57 @@
+name: mdk
+on:
+  push:
+  workflow_dispatch:
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 25
+      - name: MDK indir ve derle
+        continue-on-error: true
+        run: |
+          mkdir -p out
+          curl -fL -o mdk.zip https://maven.minecraftforge.net/net/minecraftforge/forge/26.3-66.1.9/forge-26.3-66.1.9-mdk.zip
+          mkdir p
+          unzip -q mdk.zip -d p
+          cd p
+          chmod +x gradlew
+          ./gradlew build --no-daemon --console=plain 2>&1 | tail -200 > ../out/build.log
+      - name: API dokumu
+        continue-on-error: true
+        run: |
+          mkdir -p out/vanilla
+          find / -name '*.jar' -size +1M 2>/dev/null | grep -v -E '^/(usr|opt|proc|sys)/' > alljars.txt || true
+          : > mcjars.txt
+          while read j; do
+            if unzip -Z1 "$j" 2>/dev/null | grep -q -x -E 'net/minecraft/world/item/Item.class|net/minecraftforge/registries/DeferredRegister.class|net/minecraftforge/eventbus/api/listener/SubscribeEvent.class'; then echo "$j" >> mcjars.txt; fi
+          done < alljars.txt
+          cp mcjars.txt out/
+          : > out/api.txt
+          : > out/dirs.txt
+          while read j; do
+            echo "##### JAR $j" >> out/api.txt
+            unzip -Z1 "$j" | grep -E '^net/minecraft(forge)?/.*\.class$' | grep -v '\$[0-9]' | sed 's/\.class$//; s#/#.#g' > classes.txt
+            xargs -a classes.txt -n 200 javap -public -cp "$j" >> out/api.txt 2>/dev/null || true
+            unzip -Z1 "$j" | grep -E '^(data|assets)/(minecraft|forge)/' | cut -d/ -f1-4 | sort -u >> out/dirs.txt
+            unzip -q -o "$j" 'data/minecraft/recipe*/*' 'data/minecraft/loot_table*/blocks/crafting_table.json' 'data/minecraft/loot_table*/entities/zombie.json' 'assets/minecraft/items/*' 'assets/minecraft/models/item/iron_sword.json' 'assets/minecraft/blockstates/crafting_table.json' 'data/minecraft/tags/*/mineable/*' 'data/forge/*' -d out/vanilla 2>/dev/null || true
+          done < mcjars.txt
+          gzip -f out/api.txt
+      - name: Forge kaynak
+        continue-on-error: true
+        run: |
+          git clone --depth 1 https://github.com/MinecraftForge/MinecraftForge forge-src
+          rm -rf forge-src/.git
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: api
+          path: out
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: forge-src
+          path: forge-src
